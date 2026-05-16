@@ -43,6 +43,19 @@ public sealed record InputMessage
     [JsonPropertyName("hatY")]
     public float? HatY { get; init; }
 
+
+    [JsonPropertyName("dx")]
+    public float? DeltaX { get; init; }
+
+    [JsonPropertyName("dy")]
+    public float? DeltaY { get; init; }
+
+    [JsonPropertyName("button")]
+    public string? Button { get; init; }
+
+    [JsonPropertyName("wheel")]
+    public int? Wheel { get; init; }
+
     [JsonPropertyName("time")]
     public long? ClientTimeUnixMs { get; init; }
 }

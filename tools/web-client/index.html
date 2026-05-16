@@ -21,6 +21,11 @@
     <input id="host" value="http://localhost:8128">
     <button onclick="connect()">Verbinden</button>
     <button onclick="loadGames()">Spiele laden</button>
+    <button onclick="loadInfo()">Host Info</button>
+    <button onclick="preset('low')">Low</button>
+    <button onclick="preset('balanced')">Balance</button>
+    <button onclick="preset('quality')">Qualität</button>
+    <button onclick="nextMonitor()">Monitor +</button>
   </div>
 
   <p id="status">Nicht verbunden</p>
@@ -48,7 +53,7 @@ function connect() {
   const b = base();
   const ws = b.replace('http://', 'ws://').replace('https://', 'wss://') + '/ws/input';
 
-  document.getElementById('stream').src = b + '/stream/test.mjpeg';
+  document.getElementById('stream').src = b + '/stream/live.mjpeg';
 
   socket = new WebSocket(ws);
   socket.onopen = () => {
@@ -58,6 +63,26 @@ function connect() {
   socket.onmessage = ev => log('ACK: ' + ev.data);
   socket.onerror = () => log('WebSocket Fehler');
   socket.onclose = () => log('WebSocket geschlossen');
+}
+
+async function loadInfo() {
+  const res = await fetch(base() + '/api/info');
+  const info = await res.json();
+  log(JSON.stringify(info, null, 2));
+}
+
+async function preset(name) {
+  const res = await fetch(base() + '/api/stream/preset/' + encodeURIComponent(name), { method: 'POST' });
+  log('Preset ' + name + ': HTTP ' + res.status);
+  document.getElementById('stream').src = base() + '/stream/live.mjpeg?t=' + Date.now();
+  await loadInfo();
+}
+
+async function nextMonitor() {
+  const res = await fetch(base() + '/api/stream/monitor/next', { method: 'POST' });
+  log('Monitor +: HTTP ' + res.status);
+  document.getElementById('stream').src = base() + '/stream/live.mjpeg?t=' + Date.now();
+  await loadInfo();
 }
 
 async function loadGames() {

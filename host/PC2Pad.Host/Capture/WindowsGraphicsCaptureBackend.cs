@@ -1,8 +1,4 @@
 namespace PC2Pad.Host.Capture;
-
-// Placeholder for Phase 1:
-// Windows.Graphics.Capture -> D3D11-Textur -> Encoder/WebRTC.
-// The MVP is currently using only TestCardMjpegStreamer to ensure that the network, client, and input work properly first.
 public sealed class WindowsGraphicsCaptureBackend : ICaptureBackend
 {
     public string Name => "Windows Graphics Capture";

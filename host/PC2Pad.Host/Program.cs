@@ -3,6 +3,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using PC2Pad.Host.Capture;
+using PC2Pad.Host.Discovery;
 using PC2Pad.Host.Input;
 using PC2Pad.Host.Models;
 
@@ -12,7 +13,11 @@ var bindAddress = builder.Configuration.GetValue<string>("PC2Pad:BindAddress") ?
 var port = builder.Configuration.GetValue<int?>("PC2Pad:Port") ?? 8128;
 
 builder.WebHost.UseUrls($"http://{bindAddress}:{port}");
+builder.Services.AddSingleton<WindowsInputInjector>();
 builder.Services.AddSingleton<InputRouter>();
+builder.Services.AddSingleton<RuntimeStreamOptions>();
+builder.Services.AddSingleton<DesktopMjpegStreamer>();
+builder.Services.AddHostedService<DiscoveryHostedService>();
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
@@ -40,24 +45,107 @@ PC2Pad Host läuft.
 
 API:
   GET  /api/health
+  GET  /api/info
   GET  /api/games
   POST /api/games/{id}/launch
+  GET  /api/input/status
+  POST /api/input/reset
+  GET  /api/stream/status
+  GET  /api/stream/options
+  POST /api/stream/options
+  POST /api/stream/preset/{preset}
+  POST /api/stream/monitor/next
   WS   /ws/input
+  GET  /stream/live.mjpeg
+  GET  /stream/desktop.mjpeg
   GET  /stream/test.mjpeg
+  UDP  8129 Discovery: PC2PAD_DISCOVERY_V1
 """, "text/plain; charset=utf-8"));
 
 app.MapGet("/api/health", () => Results.Json(new
 {
     name = "PC2Pad.Host",
     status = "ok",
-    version = "0.1.0-mvp",
+    version = "0.4.0-input-stream-controls",
     time = DateTimeOffset.Now
+}, jsonOptions));
+
+app.MapGet("/api/info", (IConfiguration configuration, DesktopMjpegStreamer desktopStream) => Results.Json(new
+{
+    name = "PC2Pad.Host",
+    machineName = Environment.MachineName,
+    version = "0.4.0-input-stream-controls",
+    httpPort = port,
+    discovery = new
+    {
+        enabled = configuration.GetValue<bool?>("PC2Pad:Discovery:Enabled") ?? true,
+        port = configuration.GetValue<int?>("PC2Pad:Discovery:Port") ?? 8129
+    },
+    input = new
+    {
+        enabled = configuration.GetValue<bool?>("PC2Pad:Input:Enabled") ?? true,
+        mode = configuration.GetValue<string>("PC2Pad:Input:Mode") ?? "keyboard",
+        axisThreshold = configuration.GetValue<float?>("PC2Pad:Input:AxisThreshold") ?? 0.35f,
+        rightStickAsMouse = configuration.GetValue<bool?>("PC2Pad:Input:RightStickAsMouse") ?? true,
+        triggersAsMouseButtons = configuration.GetValue<bool?>("PC2Pad:Input:TriggersAsMouseButtons") ?? true,
+        mouseSensitivity = configuration.GetValue<float?>("PC2Pad:Input:MouseSensitivity") ?? 18f,
+        touchMouseSensitivity = configuration.GetValue<float?>("PC2Pad:Input:TouchMouseSensitivity") ?? 1.2f
+    },
+    stream = desktopStream.GetStatus()
 }, jsonOptions));
 
 app.MapGet("/api/games", () =>
 {
     var games = LoadGames();
     return Results.Json(games.Where(g => g.Enabled), jsonOptions);
+});
+
+app.MapGet("/api/input/status", (InputRouter inputRouter, IConfiguration configuration) => Results.Json(new
+{
+    enabled = configuration.GetValue<bool?>("PC2Pad:Input:Enabled") ?? true,
+    mode = configuration.GetValue<string>("PC2Pad:Input:Mode") ?? "keyboard",
+    pressedKeys = inputRouter.PressedKeys.Select(vk => $"0x{vk:X2}").Order().ToArray(),
+    pressedMouseButtons = inputRouter.PressedMouseButtons.Select(button => button.ToString()).Order().ToArray(),
+    rightStickAsMouse = configuration.GetValue<bool?>("PC2Pad:Input:RightStickAsMouse") ?? true,
+    triggersAsMouseButtons = configuration.GetValue<bool?>("PC2Pad:Input:TriggersAsMouseButtons") ?? true
+}, jsonOptions));
+
+app.MapPost("/api/input/reset", (InputRouter inputRouter) =>
+{
+    inputRouter.ReleaseAll();
+    return Results.Ok(new { released = true });
+});
+
+app.MapGet("/api/stream/status", (DesktopMjpegStreamer desktopStream) => Results.Json(desktopStream.GetStatus(), jsonOptions));
+
+app.MapGet("/api/stream/options", (RuntimeStreamOptions runtimeOptions) => Results.Json(runtimeOptions.Current, jsonOptions));
+
+app.MapPost("/api/stream/options", async (HttpContext context, DesktopMjpegStreamer desktopStream) =>
+{
+    var update = await context.Request.ReadFromJsonAsync<StreamOptionsUpdate>(jsonOptions, context.RequestAborted)
+        ?? new StreamOptionsUpdate();
+
+    var options = desktopStream.Update(update);
+    return Results.Json(new { updated = true, options }, jsonOptions);
+});
+
+app.MapPost("/api/stream/preset/{preset}", (string preset, DesktopMjpegStreamer desktopStream) =>
+{
+    try
+    {
+        var options = desktopStream.ApplyPreset(preset);
+        return Results.Json(new { updated = true, preset, options }, jsonOptions);
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapPost("/api/stream/monitor/next", (DesktopMjpegStreamer desktopStream) =>
+{
+    var options = desktopStream.SelectNextMonitor();
+    return Results.Json(new { updated = true, options }, jsonOptions);
 });
 
 app.MapPost("/api/games/{id}/launch", (string id, ILoggerFactory loggerFactory) =>
@@ -133,6 +221,7 @@ app.Map("/ws/input", async (HttpContext context, InputRouter inputRouter, ILogge
 
             if (result.MessageType == WebSocketMessageType.Close)
             {
+                inputRouter.ReleaseAll();
                 await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", context.RequestAborted);
                 logger.LogInformation("Input WebSocket closed.");
                 return;
@@ -167,9 +256,33 @@ app.Map("/ws/input", async (HttpContext context, InputRouter inputRouter, ILogge
             await socket.SendAsync(err, WebSocketMessageType.Text, true, context.RequestAborted);
         }
     }
+
+    inputRouter.ReleaseAll();
 });
 
-app.MapGet("/stream/test.mjpeg", async (HttpContext context) =>
+app.MapGet("/stream/live.mjpeg", async (HttpContext context, RuntimeStreamOptions runtimeOptions, DesktopMjpegStreamer desktopStream) =>
+{
+    var mode = runtimeOptions.Current.Mode;
+    if (mode.Equals("test", StringComparison.OrdinalIgnoreCase))
+    {
+        await WriteTestMjpegAsync(context);
+        return;
+    }
+
+    await desktopStream.WriteDesktopMjpegAsync(context);
+});
+
+app.MapGet("/stream/desktop.mjpeg", async (HttpContext context, DesktopMjpegStreamer desktopStream) =>
+{
+    await desktopStream.WriteDesktopMjpegAsync(context);
+});
+
+app.MapGet("/stream/test.mjpeg", WriteTestMjpegAsync);
+
+app.Logger.LogInformation("PC2Pad Host startet auf http://{BindAddress}:{Port}", bindAddress, port);
+app.Run();
+
+static async Task WriteTestMjpegAsync(HttpContext context)
 {
     context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
     context.Response.Headers.Pragma = "no-cache";
@@ -192,10 +305,7 @@ app.MapGet("/stream/test.mjpeg", async (HttpContext context) =>
 
         await Task.Delay(TimeSpan.FromMilliseconds(33), cancellationToken);
     }
-});
-
-app.Logger.LogInformation("PC2Pad Host startet auf http://{BindAddress}:{Port}", bindAddress, port);
-app.Run();
+}
 
 List<GameEntry> LoadGames()
 {

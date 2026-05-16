@@ -1,0 +1,11 @@
+[
+  {
+    "id": "notepad",
+    "title": "Notepad Test",
+    "executable": "notepad.exe",
+    "arguments": "",
+    "workingDirectory": "",
+    "coverUrl": "",
+    "enabled": true
+  }
+]

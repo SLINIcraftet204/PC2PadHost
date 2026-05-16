@@ -1,0 +1,9 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="host/PC2Pad.Host/PC2Pad.Host.csproj">
+    <Platform Solution="*|x64" Project="x64" />
+  </Project>
+</Solution>

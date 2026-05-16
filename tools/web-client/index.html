@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>PC2Pad Web Testclient</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { background:#111118; color:#fff; font-family:system-ui, sans-serif; margin:0; padding:24px; }
+    input, button { font:inherit; padding:10px; border-radius:10px; border:0; }
+    input { width:min(520px, 90vw); }
+    button { cursor:pointer; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
+    img { width:min(100%, 960px); border:1px solid #333; border-radius:18px; background:#000; }
+    pre { background:#1b1b24; padding:12px; border-radius:12px; overflow:auto; }
+  </style>
+</head>
+<body>
+  <h1>PC2Pad Web Testclient</h1>
+
+  <div class="row">
+    <input id="host" value="http://localhost:8128">
+    <button onclick="connect()">Verbinden</button>
+    <button onclick="loadGames()">Spiele laden</button>
+  </div>
+
+  <p id="status">Nicht verbunden</p>
+  <img id="stream" alt="PC2Pad Stream">
+
+  <h2>Spiele</h2>
+  <div id="games"></div>
+
+  <h2>Log</h2>
+  <pre id="log"></pre>
+
+<script>
+let socket = null;
+
+function base() {
+  return document.getElementById('host').value.replace(/\/$/, '');
+}
+
+function log(msg) {
+  const el = document.getElementById('log');
+  el.textContent = `[${new Date().toLocaleTimeString()}] ${msg}\n` + el.textContent;
+}
+
+function connect() {
+  const b = base();
+  const ws = b.replace('http://', 'ws://').replace('https://', 'wss://') + '/ws/input';
+
+  document.getElementById('stream').src = b + '/stream/test.mjpeg';
+
+  socket = new WebSocket(ws);
+  socket.onopen = () => {
+    document.getElementById('status').textContent = 'Verbunden: ' + ws;
+    log('WebSocket verbunden');
+  };
+  socket.onmessage = ev => log('ACK: ' + ev.data);
+  socket.onerror = () => log('WebSocket Fehler');
+  socket.onclose = () => log('WebSocket geschlossen');
+}
+
+async function loadGames() {
+  const res = await fetch(base() + '/api/games');
+  const games = await res.json();
+
+  const box = document.getElementById('games');
+  box.innerHTML = '';
+
+  for (const game of games) {
+    const btn = document.createElement('button');
+    btn.textContent = 'Starten: ' + game.title;
+    btn.onclick = async () => {
+      const r = await fetch(base() + '/api/games/' + encodeURIComponent(game.id) + '/launch', { method: 'POST' });
+      log('Launch ' + game.id + ': HTTP ' + r.status);
+    };
+    box.appendChild(btn);
+    box.appendChild(document.createElement('br'));
+    box.appendChild(document.createElement('br'));
+  }
+
+  log(games.length + ' Spiele geladen');
+}
+
+window.addEventListener('keydown', ev => {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({
+    type: 'key',
+    action: 'down',
+    keyCode: ev.keyCode,
+    source: 'web',
+    time: Date.now()
+  }));
+});
+
+window.addEventListener('keyup', ev => {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({
+    type: 'key',
+    action: 'up',
+    keyCode: ev.keyCode,
+    source: 'web',
+    time: Date.now()
+  }));
+});
+</script>
+</body>
+</html>
